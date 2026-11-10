@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Automation, defaults, validateConfig, inValley, mentionText, commentText, isNewReply, ownPostReplyUsage } from "../lib/automation.js";
+import { Automation, defaults, validateConfig, inValley, mentionText, commentText, isNewReply, ownPostReplyUsage, isCommentUnavailable, COMMENT_UNAVAILABLE_PAUSE_MS } from "../lib/automation.js";
 import { parseDecision } from "../lib/generator.js";
 
 function fixture(t, overrides = {}) {
@@ -237,6 +237,66 @@ test("account changes during generation block send",async(t)=>{
   f.worker.generate=async()=>{f.account.identity="changed";return {action:"send",text:"正文"};};
   f.worker.configure({enabled:true,autoComment:true});await f.worker.run();assert.equal(f.sent.length,0);
 });
+test("only explicit platform comment-unavailable messages trigger the pause",()=>{
+  assert.equal(isCommentUnavailable({message:"小黑盒 API 请求失败：评论功能暂不可用"}),true);
+  assert.equal(isCommentUnavailable({platformMessage:"评论功能暂不可用"}),true);
+  assert.equal(isCommentUnavailable({platformStatus:"comment_unavailable"}),true);
+  assert.equal(isCommentUnavailable({message:"评论内容为空，请重新输入"}),false);
+  assert.equal(isCommentUnavailable({message:"帖子不存在或已删除"}),false);
+});
+
+test("platform comment unavailable pauses sends and resumes after cooldown",async(t)=>{
+  const {worker,sent,advance}=fixture(t);
+  const read=worker.api;
+  worker.api=async(...args)=>{
+    if(args[3]==="POST") throw Object.assign(new Error("小黑盒 API 请求失败：评论功能暂不可用"),{
+      kind:"api",definitive:true,platformStatus:"failed",platformMessage:"评论功能暂不可用",
+    });
+    return read(...args);
+  };
+  worker.configure({enabled:true,autoComment:true,postsPerRound:2});
+  await worker.run();
+  assert.equal(sent.length,0);
+  const paused=worker.status();
+  assert.match(paused.commentPaused,/评论功能暂不可用/);
+  assert.equal(paused.commentPausedUntil,Date.parse("2026-10-23T12:00:00Z")+COMMENT_UNAVAILABLE_PAUSE_MS);
+  assert.equal(worker.data.accounts["7"].actions["post:1"].status,"rejected");
+  assert.equal(worker.data.accounts["7"].actions["post:1"].platformMessage,"评论功能暂不可用");
+  assert.throws(()=>worker.run(),/评论功能暂不可用/);
+  advance(60_000);await worker.tick();assert.equal(sent.length,0);
+  worker.api=read;
+  advance(COMMENT_UNAVAILABLE_PAUSE_MS);
+  await worker.tick();
+  assert.equal(sent.length,2);
+  assert.equal(worker.status().commentPaused,"");
+});
+
+test("platform comment unavailable keeps reply queue and pauses reply sending",async(t)=>{
+  const {worker,sent}=fixture(t);
+  const read=worker.api;
+  worker.api=async(...args)=>{
+    if(args[1].endsWith("/message")) return {result:{messages:[{comment_a_id:91,root_comment_id:90,linkid:1,is_read:0}]}};
+    if(args[1].endsWith("/tree")) {
+      const result=await read(...args);
+      result.result.comments=[{comment:[
+        {commentid:90,user:{userid:7},text:"我的评论"},
+        {commentid:91,reply_id:90,user:{userid:8},text:"你觉得结局怎么样？"},
+      ]}];
+      return result;
+    }
+    if(args[3]==="POST") throw Object.assign(new Error("平台提示：评论功能暂不可用"),{
+      kind:"api",platformMessage:"评论功能暂不可用",
+    });
+    return read(...args);
+  };
+  worker.configure({enabled:true,autoReply:true,repliesPerRound:1,dailyComments:0});
+  await worker.run("reply");
+  assert.equal(sent.length,0);
+  assert.match(worker.status().commentPaused,/评论功能暂不可用/);
+  assert.equal(worker.status().replyQueue.length,1);
+  assert.equal(worker.data.accounts["7"].actions["reply:91"].status,"rejected");
+});
+
 test("replies require an actual parent belonging to us and use incoming/root IDs",async(t)=>{
   const {worker,sent}=fixture(t);
   const read=worker.api;

@@ -20,7 +20,7 @@ const nativeClear = global.clearInterval;
 global.setInterval = (fn) => { const key = timers.size + 1; timers.set(key, fn); return key; };
 global.clearInterval = (key) => timers.delete(key);
 const requests = [];
-let server = { ok: true, config: structuredClone(defaults), slang:{accountId:"123",entries:[]}, busy: false, nextRunAt: null, fault: "", usage: { comment: 0, reply: 0 }, history: [] };
+let server = { ok: true, config: structuredClone(defaults), slang:{accountId:"123",entries:[]}, busy: false, nextRunAt: null, fault: "", commentPaused: "", commentPausedUntil: null, usage: { comment: 0, reply: 0 }, history: [] };
 let account = { ok: true, loggedIn: true, heyboxId: "123" };
 let failSave = false;
 let dependencies = { ok: true, qrReady: false, nodeReady: true, nodeVersion: "v24.0.0", dshReady: true, npmReady: true, installing: false, logs: [], error: "" };
@@ -33,6 +33,20 @@ global.fetch = async (url, options) => {
     return {ok:true,status:200,json:async()=>structuredClone(server)};
   }
   if (url.includes("posting-selections?")) return { ok: true, status: 200, json: async () => ({ ok: true, communities: [{ id: "7214", name: "游戏讨论" }], hashtags: [{ name: "关卡设计", isActivity: false }] }) };
+  if (url.includes("/messages?")) return { ok: true, status: 200, json: async () => ({
+    ok: true, offset: 0, limit: 20, count: 2, nextOffset: 2, hasMore: false,
+    messages: [
+      { messageId: "1", type: "reply", typeCode: "1", typeLabel: "回复", senderName: "示例用户", senderId: "8", text: "回复正文", contextText: "被回复原文", timestamp: Date.now(), postId: "123", postTitle: "示例帖子", commentId: "91", rootCommentId: "90", isRead: false, readState: "0" },
+      { messageId: "2", type: "unknown", typeCode: "99", typeLabel: "其他通知", senderName: "系统", senderId: "", text: "未知类型也要显示", contextText: "", timestamp: Date.now(), postId: "", postTitle: "", commentId: "", rootCommentId: "", isRead: null, readState: "" },
+    ],
+  }) };
+  if (url.includes("/replies?")) return { ok: true, status: 200, json: async () => ({
+    ok: true, offset: 0, limit: 20, count: 2, total: 2, nextOffset: 2, hasMore: false,
+    replies: [
+      { replyId: "91", commentId: "101", type: "reply", typeLabel: "评论回复", status: "sent", statusLabel: "已发送", text: "我的回复正文", contextText: "对方原文", timestamp: Date.now(), postId: "123", postTitle: "示例帖子" },
+      { replyId: "", commentId: "102", type: "comment", typeLabel: "帖子评论", status: "accepted", statusLabel: "已受理", text: "我的帖子评论", contextText: "", timestamp: Date.now(), postId: "124", postTitle: "另一帖子" },
+    ],
+  }) };
   if (url.includes("/watched?")) return { ok: true, status: 200, json: async () => ({ ok: true, total: 1, records: [{ at: Date.now(), type: "browse", title: "示例帖子", postId: "123" }] }) };
   if (url.endsWith("dependencies")) {
     if (body?.action === "install") dependencies = { ...dependencies, installing: true, logs: ["正在安装 qrcode…"] };
@@ -64,6 +78,7 @@ function harness() {
     useEffect(fn) { const i = cursor++; if (!(i in hooks)) { hooks[i] = true; effects.push(fn); } },
   };
   const registrations = new Map();
+  const views = new Map();
   const cleanup = [];
   const module = bundle.factory((name) => { assert.equal(name, "react"); return react; });
   assert.deepEqual(module.inject, ["slots"]);
@@ -71,7 +86,10 @@ function harness() {
     effect: (fn) => cleanup.push(fn()),
     get: () => ({
       inject: (name, fn) => { assert.ok(["settings.section", "conversation.view"].includes(name)); return fn(); },
-      register: (desc, render) => { registrations.set(desc.name, { desc, render }); },
+      register: (desc, render) => {
+        registrations.set(desc.name, { desc, render });
+        if (desc.name === "conversation.view") views.set(desc.id, { desc, render });
+      },
     }),
   });
   function expand(node) {
@@ -82,7 +100,15 @@ function harness() {
   let component;
   return {
     registrations,
-    mount(name) { component = registrations.get(name).render().type; const tree = this.render(); for (const effect of effects.splice(0)) cleanup.push(effect()); return tree; },
+    views,
+    mount(name, id) {
+      const entry = name === "conversation.view" && id ? views.get(id) : registrations.get(name);
+      assert.ok(entry, name + (id ? ":" + id : ""));
+      component = entry.render().type;
+      const tree = this.render();
+      for (const effect of effects.splice(0)) cleanup.push(effect());
+      return tree;
+    },
     render() { cursor = 0; return expand(component()); },
     unmount() { for (const stop of cleanup) stop?.(); },
   };
@@ -97,9 +123,14 @@ async function poll() { await Promise.all([...timers.values()].map((fn) => fn())
 try {
   const page = harness();
   assert.equal(page.registrations.get("settings.section").desc.label, "刷小黑盒");
-  assert.equal(page.registrations.get("conversation.view").desc.label, "刷过的帖子");
-  assert.equal(page.registrations.get("conversation.view").desc.scope, "session");
-  assert.equal(page.registrations.get("conversation.view").desc.id, "heybox-watched");
+  assert.equal(page.views.get("heybox-watched").desc.label, "刷过的帖子");
+  assert.equal(page.views.get("heybox-watched").desc.scope, "session");
+  assert.equal(page.views.get("heybox-messages").desc.label, "消息中心");
+  assert.equal(page.views.get("heybox-messages").desc.scope, "session");
+  assert.equal(page.views.get("heybox-messages").desc.order, 21);
+  assert.equal(page.views.get("heybox-replies").desc.label, "我的回复");
+  assert.equal(page.views.get("heybox-replies").desc.scope, "session");
+  assert.equal(page.views.get("heybox-replies").desc.order, 22);
   page.mount("settings.section");
   await settle();
   let tree = page.render();
@@ -277,6 +308,16 @@ try {
   assert.equal(button(page.render(), "停止全部任务").props.disabled,false,"posting-only automation can be stopped");
   server.config.enabled=true;await poll();
 
+  assert.equal(button(page.render(), "立即浏览一轮").props.disabled, false);
+  server.commentPaused = "平台评论功能暂不可用";
+  server.commentPausedUntil = Date.now() + 1800000;
+  await poll();
+  tree = page.render();
+  assert.ok(text(tree).includes("平台评论功能暂不可用"));
+  assert.equal(button(tree, "立即浏览一轮").props.disabled, true);
+  server.commentPaused = "";
+  server.commentPausedUntil = null;
+  await poll();
 
   button(page.render(), "运行时段").props.onClick();
   button(page.render(), "峰底快捷方案").props.onClick();
@@ -349,12 +390,61 @@ try {
   assert.equal(timers.size, 0, "poll timer cleaned up");
   assert.ok(styles.at(-1).removed);
 
+  const messages = harness();
+  messages.mount("conversation.view", "heybox-messages");
+  await settle();
+  tree = messages.render();
+  assert.ok(text(tree).includes("消息中心"));
+  assert.ok(text(tree).includes("示例用户"));
+  assert.ok(text(tree).includes("回复正文"));
+  assert.ok(text(tree).includes("未知类型也要显示"));
+  assert.ok(text(tree).includes("其他通知"));
+  assert.ok(text(tree).includes("示例帖子"));
+  assert.ok(text(tree).includes("未读"));
+  assert.equal(all(tree).find((n) => n.type === "a").props.href, "https://www.xiaoheihe.cn/app/bbs/link/123");
+  assert.ok(requests.some((r) => r.url.includes("/heybox/messages?offset=0&limit=20")));
+  assert.equal(button(tree, "下一页").props.disabled, true);
+  button(tree, "回复").props.onClick();
+  tree = messages.render();
+  assert.ok(text(tree).includes("回复正文"));
+  assert.ok(!text(tree).includes("未知类型也要显示"));
+  button(tree, "其他通知").props.onClick();
+  tree = messages.render();
+  assert.ok(text(tree).includes("未知类型也要显示"));
+  assert.ok(!text(tree).includes("回复正文"));
+  assert.ok(text(tree).includes("第 1 页 · 每页 20 条"));
+  messages.unmount();
+  assert.equal(timers.size, 0, "message center does not install a timer");
+
+  const replies = harness();
+  replies.mount("conversation.view", "heybox-replies");
+  await settle();
+  tree = replies.render();
+  assert.ok(text(tree).includes("我的回复"));
+  assert.ok(text(tree).includes("评论回复"));
+  assert.ok(text(tree).includes("已发送"));
+  assert.ok(text(tree).includes("我的回复正文"));
+  assert.ok(text(tree).includes("对方原文"));
+  assert.ok(text(tree).includes("示例帖子"));
+  assert.ok(text(tree).includes("已受理"));
+  assert.ok(text(tree).includes("我的帖子评论"));
+  assert.ok(text(tree).includes("本插件记录的已发送、已受理或结果未知内容"));
+  assert.equal(all(tree).find((n) => n.type === "a").props.href, "https://www.xiaoheihe.cn/app/bbs/link/123");
+  assert.ok(requests.some((r) => r.url.includes("/heybox/replies?offset=0&limit=20")));
+  assert.equal(button(tree, "下一页").props.disabled, true);
+  button(tree, "帖子评论").props.onClick();
+  tree = replies.render();
+  assert.ok(text(tree).includes("我的帖子评论"));
+  assert.ok(!text(tree).includes("我的回复正文"));
+  replies.unmount();
+  assert.equal(timers.size, 0, "my replies does not install a timer");
+
   server.history = [
     { at: Date.now(), type: "browse", message: "已读取帖子", title: "示例帖子", postId: "123" },
     { at: Date.now(), type: "error", message: "示例失败" },
   ];
   const watched = harness();
-  watched.mount("conversation.view");
+  watched.mount("conversation.view", "heybox-watched");
   await settle();
   tree = watched.render();
   assert.ok(text(tree).includes("示例帖子"));

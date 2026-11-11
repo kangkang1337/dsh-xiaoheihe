@@ -106,7 +106,7 @@ try {
     assert.equal(url.origin,"https://api.xiaoheihe.cn");
     assert.equal(url.pathname,"/bbs/app/comment/create");
     const {hkey,_time,nonce,_rnd,...base} = Object.fromEntries(url.searchParams);
-    assert.deepEqual(base, {app:"heybox",os_type:"web",x_app:"heybox_website",x_client_type:"web",x_os_type:"Windows",x_client_version:"",client_type:"web",web_version:"3.0",version:"999.0.4"});
+    assert.deepEqual(base, {app:"heybox",heybox_id:"42",os_type:"web",x_app:"heybox_website",x_client_type:"weboutapp",x_os_type:"Windows",web_version:"3.0",device_id:"fixture-device"});
     assert.equal(hkey,ov(url.pathname,Number(_time),nonce));
     assert.match(nonce,/^[A-F0-9]{32}$/);
     assert.ok(Math.abs(Number(_time)-Math.floor(Date.now()/1000))<5);
@@ -132,6 +132,11 @@ try {
   const postCall = writeCalls.at(-1);
   assert.equal(postCall.url.pathname,"/bbs/app/api/link/post");
   assert.equal(postCall.url.searchParams.get("web_version"),"3.0");
+  assert.equal(postCall.url.searchParams.has("_rnd"),false);
+  const postParams = Object.fromEntries(postCall.url.searchParams);
+  assert.equal(postParams.heybox_id,"42");
+  assert.equal(postParams.x_client_type,"weboutapp");
+  assert.equal(postParams.device_id,"fixture-device");
   assert.equal(postCall.url.searchParams.get("hkey"),ov(postCall.url.pathname,Number(postCall.url.searchParams.get("_time")),postCall.url.searchParams.get("nonce")));
   assert.deepEqual(Object.fromEntries(new URLSearchParams(postCall.options.body)),postForm);
 

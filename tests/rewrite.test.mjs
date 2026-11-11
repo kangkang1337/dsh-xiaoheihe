@@ -89,7 +89,19 @@ try {
 } finally { globalThis.fetch = originalFetch; }
 
 // Exercise the actual request builder with an offline fetch stub for both write modes.
-const { createHmac } = await import("node:crypto");
+const { createDecipheriv } = await import("node:crypto");
+const RND16_KEY = Buffer.from("HFFSTsqmvG3uGxPNXDQW+1VARfqgG4nT6LS1PX7F8NQ=", "base64");
+function decodeRnd16(value) {
+  assert.match(value, /^16:/);
+  const buffer = Buffer.from(value.slice(3), "base64url");
+  const iv = buffer.subarray(0, 12);
+  const tag = buffer.subarray(-16);
+  const encrypted = buffer.subarray(12, -16);
+  const decipher = createDecipheriv("aes-256-gcm", RND16_KEY, iv);
+  decipher.setAAD(Buffer.from("heybox-rnd:v16"));
+  decipher.setAuthTag(tag);
+  return JSON.parse(Buffer.concat([decipher.update(encrypted), decipher.final()]).toString("utf8"));
+}
 const { platformText } = await import("../lib/platform-error.js");
 const writeCalls = [];
 try {
@@ -110,8 +122,7 @@ try {
     assert.equal(hkey,ov(url.pathname,Number(_time),nonce));
     assert.match(nonce,/^[A-F0-9]{32}$/);
     assert.ok(Math.abs(Number(_time)-Math.floor(Date.now()/1000))<5);
-    const key="Z7mFG4tQp9Ws2LxB8H"; // gitleaks:allow -- public protocol test vector, not account credentials
-    assert.equal(_rnd,"15:"+createHmac("sha256",key).update(`${key}${nonce}${_time}:${nonce}`).digest("hex"));
+    assert.deepEqual(decodeRnd16(_rnd),[_time,nonce,"/bbs/app/comment/create/"]);
     assert.equal(options.method,"POST");
     assert.equal(options.redirect,"error");
     assert.equal(options.headers.Cookie,state.cookie);
@@ -132,12 +143,12 @@ try {
   const postCall = writeCalls.at(-1);
   assert.equal(postCall.url.pathname,"/bbs/app/api/link/post");
   assert.equal(postCall.url.searchParams.get("web_version"),"3.0");
-  assert.equal(postCall.url.searchParams.has("_rnd"),false);
   const postParams = Object.fromEntries(postCall.url.searchParams);
   assert.equal(postParams.heybox_id,"42");
   assert.equal(postParams.x_client_type,"weboutapp");
   assert.equal(postParams.device_id,"fixture-device");
   assert.equal(postCall.url.searchParams.get("hkey"),ov(postCall.url.pathname,Number(postCall.url.searchParams.get("_time")),postCall.url.searchParams.get("nonce")));
+  assert.deepEqual(decodeRnd16(postParams._rnd),[postParams._time,postParams.nonce,"/bbs/app/api/link/post/"]);
   assert.deepEqual(Object.fromEntries(new URLSearchParams(postCall.options.body)),postForm);
 
   globalThis.fetch=async()=>new Response(JSON.stringify({status:"failed",msg:"缺失参数",result:{}}),{status:200});

@@ -5,6 +5,7 @@ import {
   normalizeReply,
   normalizeReplyPage,
   createRepliesHandler,
+  rpcWriteRecord,
 } from "../lib/index.js";
 
 function fakeResponse() {
@@ -146,6 +147,37 @@ test("read-only handler rejects unauthenticated, invalid and non-GET requests", 
   await handler(fakeRequest("/heybox/replies", "POST"), res);
   assert.equal(res.status, 405);
   assert.equal(res.json().error, "GET only");
+});
+
+test("successful RPC comment, reply and post writes become reply records", () => {
+  const comment = rpcWriteRecord("/bbs/app/comment/create", { link_id: "1", reply_id: "-1", text: "评论" }, { status: "ok", commentid: 9 }, 100);
+  assert.deepEqual(comment, {
+    kind: "comment", status: "sent", postId: "1", commentId: "9", replyId: "", text: "评论", displayText: "评论", at: 100,
+  });
+  const reply = rpcWriteRecord("/bbs/app/comment/create", { link_id: "1", reply_id: "8", text: "回复" }, { status: "ok", result: { commentid: 10 } }, 200);
+  assert.equal(reply.kind, "reply");
+  assert.equal(reply.replyId, "8");
+  assert.equal(reply.commentId, "10");
+  const post = rpcWriteRecord("/bbs/app/api/link/post", { title: "标题", text: JSON.stringify([{ type: "text", text: "正文" }]) }, { status: "ok", result: { link_id: 11 } }, 300);
+  assert.deepEqual(post, {
+    kind: "post", status: "sent", postId: "11", title: "标题", text: "正文", at: 300,
+  });
+  assert.equal(rpcWriteRecord("/bbs/app/api/link/post", {}, { status: "failed" }), null);
+  assert.equal(rpcWriteRecord("/bbs/app/feeds", {}, { status: "ok" }), null);
+  assert.equal(rpcWriteRecord("/bbs/app/comment/create", null, { status: "ok" }), null);
+});
+
+test("RPC posts are labeled as posts and included in pagination", () => {
+  const page = normalizeReplyPage([
+    { kind: "post", status: "sent", postId: "7", title: "帖子标题", text: "帖子正文", at: 10 },
+    { kind: "comment", status: "sent", postId: "1", commentId: "2", text: "评论", at: 20 },
+  ], 0, 20);
+  assert.equal(page.count, 2);
+  assert.equal(page.replies[0].type, "comment");
+  assert.equal(page.replies[1].type, "post");
+  assert.equal(page.replies[1].typeLabel, "帖子");
+  assert.equal(page.replies[1].postTitle, "帖子标题");
+  assert.equal(page.replies[1].text, "帖子正文");
 });
 
 test("local record read failure stays a generic read-only error", async () => {

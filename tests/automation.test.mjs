@@ -237,6 +237,16 @@ test("account changes during generation block send",async(t)=>{
   f.worker.generate=async()=>{f.account.identity="changed";return {action:"send",text:"正文"};};
   f.worker.configure({enabled:true,autoComment:true});await f.worker.run();assert.equal(f.sent.length,0);
 });
+test("external RPC sends are recorded without consuming automation quota", (t) => {
+  const { worker } = fixture(t);
+  worker.recordExternalSend({ kind: "post", status: "sent", postId: "11", title: "外部帖子", text: "正文", at: 123 });
+  const record = worker.status().interactions[0];
+  assert.equal(record.kind, "post");
+  assert.equal(record.postId, "11");
+  assert.equal(record.title, "外部帖子");
+  assert.equal(worker.status().usage.comment, 0);
+  assert.equal(worker.status().usage.reply, 0);
+});
 test("only explicit platform comment-unavailable messages trigger the pause",()=>{
   assert.equal(isCommentUnavailable({message:"小黑盒 API 请求失败：评论功能暂不可用"}),true);
   assert.equal(isCommentUnavailable({platformMessage:"评论功能暂不可用"}),true);

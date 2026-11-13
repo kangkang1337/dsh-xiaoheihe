@@ -41,10 +41,11 @@ global.fetch = async (url, options) => {
     ],
   }) };
   if (url.includes("/replies?")) return { ok: true, status: 200, json: async () => ({
-    ok: true, offset: 0, limit: 20, count: 2, total: 2, nextOffset: 2, hasMore: false,
+    ok: true, offset: 0, limit: 20, count: 3, total: 3, nextOffset: 3, hasMore: false,
     replies: [
       { replyId: "91", commentId: "101", type: "reply", typeLabel: "评论回复", status: "sent", statusLabel: "已发送", text: "我的回复正文", contextText: "对方原文", timestamp: Date.now(), postId: "123", postTitle: "示例帖子" },
       { replyId: "", commentId: "102", type: "comment", typeLabel: "帖子评论", status: "accepted", statusLabel: "已受理", text: "我的帖子评论", contextText: "", timestamp: Date.now(), postId: "124", postTitle: "另一帖子" },
+      { replyId: "", commentId: "", type: "post", typeLabel: "帖子", status: "sent", statusLabel: "已发送", text: "我的帖子正文", contextText: "", timestamp: Date.now(), postId: "125", postTitle: "新帖子" },
     ],
   }) };
   if (url.includes("/watched?")) return { ok: true, status: 200, json: async () => ({ ok: true, total: 1, records: [{ at: Date.now(), type: "browse", title: "示例帖子", postId: "123" }] }) };
@@ -428,13 +429,18 @@ try {
   assert.ok(text(tree).includes("示例帖子"));
   assert.ok(text(tree).includes("已受理"));
   assert.ok(text(tree).includes("我的帖子评论"));
-  assert.ok(text(tree).includes("本插件记录的已发送、已受理或结果未知内容"));
+  assert.ok(text(tree).includes("我的帖子正文"));
+  assert.ok(text(tree).includes("本插件或 RPC 记录的已发送、已受理或结果未知内容"));
   assert.equal(all(tree).find((n) => n.type === "a").props.href, "https://www.xiaoheihe.cn/app/bbs/link/123");
   assert.ok(requests.some((r) => r.url.includes("/heybox/replies?offset=0&limit=20")));
   assert.equal(button(tree, "下一页").props.disabled, true);
   button(tree, "帖子评论").props.onClick();
   tree = replies.render();
   assert.ok(text(tree).includes("我的帖子评论"));
+  assert.ok(!text(tree).includes("我的回复正文"));
+  button(tree, "帖子").props.onClick();
+  tree = replies.render();
+  assert.ok(text(tree).includes("我的帖子正文"));
   assert.ok(!text(tree).includes("我的回复正文"));
   replies.unmount();
   assert.equal(timers.size, 0, "my replies does not install a timer");
